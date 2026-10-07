@@ -99,8 +99,6 @@ export const BuilderView: React.FC<BuilderViewProps> = ({ onBack }) => {
       ? 'Bonus Minefield'
       : boardType === 'bingo_5x5'
       ? '5x5 Bingo Matrix'
-      : boardType === 'hot_potato'
-      ? 'Hot Potato Gauntlet'
       : 'Jeopardy Board';
 
     const newCategories = [
@@ -657,7 +655,6 @@ export const BuilderView: React.FC<BuilderViewProps> = ({ onBack }) => {
               <option value="standard">Standard Board (5x5 Grid)</option>
               <option value="bonus_minefield">Bonus Minefield Board (Player Author 1.5x / 0.5x)</option>
               <option value="bingo_5x5">5x5 Bingo Matrix ($1,000 Bonus)</option>
-              <option value="hot_potato">Hot Potato Gauntlet (90s Bomb Deck)</option>
             </select>
           </div>
         </div>

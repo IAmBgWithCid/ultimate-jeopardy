@@ -26,7 +26,7 @@ export const BuzzerButton: React.FC<BuzzerButtonProps> = ({
   const [localAuthorTimer, setLocalAuthorTimer] = useState<number>(authorDelaySeconds);
   const renderTimestampRef = useRef<number>(0);
 
-  // When buzzer unlocks, record high-precision client timestamp
+  // When buzzer unlocks or new clue timestamp is received, reset buzz state
   useEffect(() => {
     if (isUnlocked && !disabled && !isJammed) {
       renderTimestampRef.current = window.performance.now();
@@ -38,7 +38,7 @@ export const BuzzerButton: React.FC<BuzzerButtonProps> = ({
         navigator.vibrate(30);
       }
     }
-  }, [isUnlocked, disabled, isJammed]);
+  }, [isUnlocked, unlockTimestampMs]);
 
   // Handle author delay timer
   useEffect(() => {

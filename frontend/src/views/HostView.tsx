@@ -2,10 +2,9 @@ import React, { useEffect, useState, useRef } from 'react';
 import { StandardBoard } from '../components/boards/StandardBoard';
 import { BonusBoardOverlay } from '../components/boards/BonusBoardOverlay';
 import { BingoBoard } from '../components/boards/BingoBoard';
-import { HotPotatoBoard } from '../components/boards/HotPotatoBoard';
 import { ClueModal } from '../components/cards/ClueModal';
 import { ContestantsTopRow } from '../components/scoreboard/ContestantsTopRow';
-import { ArrowLeft, Play, FastForward, ShoppingBag, Sliders, Users, Zap, RotateCcw, Sparkles, CheckCircle2, Save } from 'lucide-react';
+import { ArrowLeft, Play, FastForward, Sliders, Users, Zap, RotateCcw, Sparkles, CheckCircle2, Save } from 'lucide-react';
 
 interface HostViewProps {
   roomCode: string;
@@ -14,7 +13,6 @@ interface HostViewProps {
 
 export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
   const [gameState, setGameState] = useState<any>(null);
-  const [activeItemBanners, setActiveItemBanners] = useState<string[]>([]);
   const [overrideModalOpen, setOverrideModalOpen] = useState(false);
   const [selectedPlayerForOverride, setSelectedPlayerForOverride] = useState<string>('');
   const [scoreDelta, setScoreDelta] = useState<number>(0);
@@ -49,8 +47,6 @@ export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'state:update') {
           setGameState(msg.data);
-        } else if (msg.type === 'host:item_cast_banner') {
-          setActiveItemBanners((prev) => [...prev.slice(-3), msg.data.banner_text]);
         } else if (msg.type === 'media:sync') {
           setMediaSyncState(msg.data);
         }
@@ -107,14 +103,6 @@ export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
 
   const handleAdvanceRound = (roundIdx: number) => {
     send('host:advance_round', { round_idx: roundIdx });
-  };
-
-  const handleSetShop = () => {
-    send('host:set_shop');
-  };
-
-  const handleCloseShop = () => {
-    send('host:close_shop');
   };
 
   const handleSwitchBoard = (isBonus: boolean) => {
@@ -198,7 +186,6 @@ export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
               <option value={1} className="bg-slate-900">R1: Minefield</option>
               <option value={2} className="bg-slate-900">R2: Double Jeopardy</option>
               <option value={3} className="bg-slate-900">R3: 5x5 Bingo</option>
-              <option value={4} className="bg-slate-900">R4: Hot Potato</option>
             </select>
           </div>
 
@@ -220,27 +207,6 @@ export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
               </>
             )}
           </button>
-
-          {isShop ? (
-            <button
-              type="button"
-              onClick={handleCloseShop}
-              className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 border border-emerald-300 text-white text-xs font-mono font-bold flex items-center gap-1.5 transition-colors shadow animate-pulse"
-              title="Close shop and return everyone to the board"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Resume Board</span>
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleSetShop}
-              className="px-3 py-1.5 rounded-xl bg-amber-600/30 hover:bg-amber-600/50 border border-amber-400 text-amber-300 text-xs font-mono font-bold flex items-center gap-1.5 transition-colors shadow"
-            >
-              <ShoppingBag className="w-3.5 h-3.5" />
-              <span>Open Shop</span>
-            </button>
-          )}
 
           <button
             type="button"
@@ -280,12 +246,12 @@ export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
         </div>
       </header>
 
-      {/* Contestants Money & Tokens Row at Top */}
+      {/* Contestants Row at Top */}
       <ContestantsTopRow
         players={gameState?.players || []}
         activePickerId={activePickerId}
         buzzWinnerId={gameState?.buzzer?.winner?.player_id}
-        hotPotatoHolderId={gameState?.hot_potato?.holder_id}
+        buzzQueue={gameState?.buzzer?.queue || []}
         onSelectPicker={handleSetPicker}
       />
 
@@ -352,23 +318,6 @@ export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
             >
               <Sparkles className="w-6 h-6 fill-amber-300 text-amber-300 animate-spin" />
               <span className="font-display tracking-wider">START GAME & SHUFFLE TEAMS</span>
-            </button>
-          </div>
-        </div>
-      ) : isShop ? (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center max-w-lg mx-auto w-full">
-          <div className="w-full clay-card bg-[#1A0E34]/95 border-2 border-amber-500/80 rounded-3xl p-8 shadow-2xl backdrop-blur-xl">
-            <ShoppingBag className="w-16 h-16 text-amber-400 mx-auto mb-4 animate-bounce" />
-            <h2 className="bubble-text gold-theme text-3xl font-black mb-2">SHOP INTERMISSION</h2>
-            <p className="text-sm font-mono text-slate-300 mb-6">
-              Contestants are spending Bounty Tokens to acquire items and buffs.
-            </p>
-            <button
-              type="button"
-              onClick={handleCloseShop}
-              className="w-full py-4 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-green-600 hover:from-emerald-400 hover:to-green-500 text-black font-black text-base font-mono shadow-2xl active:scale-95"
-            >
-              CLOSE SHOP & RESUME BOARD
             </button>
           </div>
         </div>
@@ -471,14 +420,6 @@ export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
                 pickerName={activePickerName}
                 onTileClick={handleTileClick}
               />
-            ) : boardType === 'hot_potato' ? (
-              <HotPotatoBoard
-                timerRemainingMs={gameState?.hot_potato?.timer_remaining_ms || 90000}
-                holderId={gameState?.hot_potato?.holder_id}
-                players={gameState?.players || []}
-                activeClue={activeClue}
-                isHost={true}
-              />
             ) : (
               <StandardBoard
                 categories={gameState?.categories || []}
@@ -516,7 +457,6 @@ export const HostView: React.FC<HostViewProps> = ({ roomCode, onLeave }) => {
           onJudge={handleJudge}
           onSelectBuzzer={handleSelectBuzzer}
           onClose={handleCloseClue}
-          activeItemBanners={activeItemBanners}
           onMediaControl={handleMediaControl}
           mediaSyncState={mediaSyncState}
         />

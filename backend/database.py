@@ -361,41 +361,6 @@ async def seed_default_template(db):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL)
         """, (clue_id, bingo_cat_id, clue_md, ans, topic, pts, r, c))
 
-    # ROUND 4: Hot Potato Gauntlet
-    r4_id = f"{template_id}-r4"
-    await db.execute("""
-    INSERT INTO template_rounds (id, template_id, round_number, round_name, board_type, round_timer_seconds, shop_follows)
-    VALUES (?, ?, 4, 'Round 4: Hot Potato Gauntlet', 'hot_potato', 90, 0)
-    """, (r4_id, template_id))
-
-    hp_cat_id = f"{r4_id}-deck"
-    await db.execute("""
-    INSERT INTO categories (id, round_id, name, display_order)
-    VALUES (?, ?, 'Hot Potato Deck', 0)
-    """, (hp_cat_id, r4_id))
-
-    hp_clues = [
-        ("What is the capital of Canada?", "Ottawa", "Geography: North America"),
-        ("Which chemical element has atomic number 1?", "Hydrogen", "Chemistry: Elements"),
-        ("Who directed *Inception* and *Oppenheimer*?", "Christopher Nolan", "Cinema: Directors"),
-        ("What is the primary currency of Japan?", "Yen", "World Economics"),
-        ("In what year did the Titanic sink?", "1912", "Maritime Disasters"),
-        ("What is the largest organ in the human body?", "Skin", "Human Biology"),
-        ("Who painted the ceiling of the Sistine Chapel?", "Michelangelo", "Renaissance Art"),
-        ("What is the speed of light in vacuum (approx km/s)?", "300,000 km/s", "Physics: Constants"),
-        ("Which planet is closest to the Sun?", "Mercury", "Astronomy: Solar System"),
-        ("In computing, what does GPU stand for?", "Graphics Processing Unit", "Tech Hardware"),
-        ("What is the national animal of Scotland?", "Unicorn", "Folklore & Symbols"),
-        ("Who wrote *Romeo and Juliet*?", "William Shakespeare", "Classic Literature")
-    ]
-
-    for idx, (clue_md, ans, topic) in enumerate(hp_clues):
-        clue_id = f"{hp_cat_id}-clue{idx}"
-        await db.execute("""
-        INSERT INTO clues (id, category_id, clue_markdown, correct_answer, topic_preview, base_points, row_idx, col_idx, is_bonus_mine, author_name)
-        VALUES (?, ?, ?, ?, ?, 500, ?, 0, 0, NULL)
-        """, (clue_id, hp_cat_id, clue_md, ans, topic, idx))
-
     # DEDICATED BONUS BOARD: Contestant Vault (Active upon Event Tile trigger)
     await seed_bonus_board_round(db, template_id)
 

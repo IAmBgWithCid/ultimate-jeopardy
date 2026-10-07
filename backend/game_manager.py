@@ -10,16 +10,12 @@ class GameManager:
     def __init__(self):
         # session_id -> BuzzerArbitrator
         self.arbitrators: Dict[str, BuzzerArbitrator] = {}
-        # session_id -> background tasks (timers, hot potato ticker, etc.)
+        # session_id -> background tasks
         self.session_tasks: Dict[str, List[asyncio.Task]] = {}
-        # session_id -> item window end timestamp
-        self.item_window_tasks: Dict[str, asyncio.Task] = {}
         # broadcast callbacks: session_id -> callback(event_type, payload)
         self.broadcast_callbacks: Dict[str, Any] = {}
         # targeted callbacks: session_id -> callback(player_id, event_type, payload)
         self.targeted_callbacks: Dict[str, Any] = {}
-        # hot potato ticker tasks
-        self.hot_potato_tasks: Dict[str, asyncio.Task] = {}
 
     def _get_or_create_arbitrator(self, session_id: str) -> BuzzerArbitrator:
         if session_id not in self.arbitrators:
@@ -238,15 +234,13 @@ class GameManager:
                 "bingo_lines": bingo_lines,
                 "players": players,
                 "activity_log": activity_log,
-                "hot_potato": {
-                    "holder_id": session["hot_potato_holder_id"],
-                    "timer_remaining_ms": session["hot_potato_timer_remaining_ms"]
-                },
+                "hot_potato": None,
                 "buzzer": {
                     "is_unlocked": arbitrator.is_unlocked if arbitrator else False,
                     "winner": buzz_winner,
                     "candidates": buzz_candidates,
-                    "queue": [c.model_dump() for c in sorted_queue]
+                    "queue": [c.model_dump() for c in sorted_queue],
+                    "locked_out_player_ids": list(arbitrator.locked_out_player_ids) if arbitrator else []
                 }
             }
 
@@ -429,7 +423,7 @@ class GameManager:
         return {"success": True, "player_id": player_id, "picker_name": picker_name}
 
     # -------------------------------------------------------------
-    # 5-SECOND ITEM WINDOW & CASTING
+    # CLUE SELECTION, REVEAL & BUZZER ARBITRATION
     # -------------------------------------------------------------
     async def select_clue(self, session_id: str, clue_id: str):
         async with get_db() as db:
@@ -440,12 +434,11 @@ class GameManager:
 
             is_bonus_mine = bool(clue["is_bonus_mine"])
 
-            # If Bonus Mine in Round 1:
+            # If Bonus Mine / Event Tile:
             if is_bonus_mine:
-                # State transition: BONUS_MINE_EXPLODE (Adjustment 4)
                 await db.execute("""
                 UPDATE game_sessions
-                SET state = 'BONUS_MINE_EXPLODE', active_clue_id = ?
+                SET state = 'BONUS_MINE_EXPLODE', active_clue_id = ?, selected_tile_id = NULL
                 WHERE id = ?
                 """, (clue_id, session_id))
                 await db.commit()
@@ -455,108 +448,22 @@ class GameManager:
                     "author_name": clue["author_name"],
                     "points": clue["base_points"]
                 })
-                # Award 2 bonus tokens to discovering player or room notification
-                await self.broadcast_state(session_id)
+                # Automatically arm buzzers!
+                await self.arm_buzzers(session_id)
                 return
 
-            # Standard Tile: Enter 5s Item Window
+            # Standard Tile: Immediately transition to CLUE_REVEAL and arm buzzers
             await db.execute("""
             UPDATE game_sessions
-            SET state = 'ITEM_WINDOW', active_clue_id = ?
+            SET state = 'CLUE_REVEAL', active_clue_id = ?, selected_tile_id = NULL
             WHERE id = ?
             """, (clue_id, session_id))
             await db.commit()
 
-        # Start 5s countdown
-        if session_id in self.item_window_tasks and not self.item_window_tasks[session_id].done():
-            self.item_window_tasks[session_id].cancel()
+        # Arm buzzers automatically when clue is revealed
+        await self.arm_buzzers(session_id)
 
-        self.item_window_tasks[session_id] = asyncio.create_task(self._item_window_countdown(session_id))
-        await self.broadcast_state(session_id)
-
-    async def _item_window_countdown(self, session_id: str):
-        try:
-            await asyncio.sleep(5.0)
-            # Window expired -> transition to CLUE_REVEAL
-            await self.reveal_clue(session_id)
-        except asyncio.CancelledError:
-            pass
-
-    async def cast_item(self, session_id: str, player_id: str, item_key: str, target_player_id: Optional[str] = None) -> Dict[str, Any]:
-        async with get_db() as db:
-            session_cur = await db.execute("SELECT state, active_clue_id FROM game_sessions WHERE id = ?", (session_id,))
-            session = await session_cur.fetchone()
-            if not session or session["state"] not in ("ITEM_WINDOW", "BONUS_MINE_EXPLODE"):
-                return {"success": False, "error": "Item cast window is closed"}
-
-            clue_id = session["active_clue_id"]
-
-            # Check inventory
-            inv_cur = await db.execute("""
-            SELECT id FROM session_inventory
-            WHERE player_id = ? AND item_key = ? AND is_consumed = 0
-            LIMIT 1
-            """, (player_id, item_key))
-            inv_item = await inv_cur.fetchone()
-            if not inv_item:
-                return {"success": False, "error": "You do not own this item"}
-
-            # Mark consumed
-            await db.execute("UPDATE session_inventory SET is_consumed = 1 WHERE id = ?", (inv_item["id"],))
-
-            cast_id = str(uuid.uuid4())
-            await db.execute("""
-            INSERT INTO session_active_casts (id, session_id, player_id, item_key, target_player_id, clue_id)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (cast_id, session_id, player_id, item_key, target_player_id, clue_id))
-
-            # Fetch names for banner
-            p_cur = await db.execute("SELECT display_name FROM session_players WHERE id = ?", (player_id,))
-            p_row = await p_cur.fetchone()
-            caster_name = p_row["display_name"] if p_row else "Player"
-
-            target_name = None
-            if target_player_id:
-                t_cur = await db.execute("SELECT display_name FROM session_players WHERE id = ?", (target_player_id,))
-                t_row = await t_cur.fetchone()
-                target_name = t_row["display_name"] if t_row else "Opponent"
-
-            item_cur = await db.execute("SELECT name FROM shop_items WHERE item_key = ?", (item_key,))
-            item_row = await item_cur.fetchone()
-            item_name = item_row["name"] if item_row else item_key
-
-            await db.commit()
-
-        # Target-side Debuff Animation Notification (Adjustment 2)
-        if item_key == "static_jammer" and target_player_id:
-            await self.send_to_player(session_id, target_player_id, "debuff:static_jammer", {
-                "caster_name": caster_name,
-                "clue_id": clue_id
-            })
-
-        # Broadcast item banner to Host and TV
-        banner_msg = f"{caster_name} cast {item_name} on {target_name}!" if target_name else f"{caster_name} activated {item_name}!"
-        await self.log_activity(session_id, "ITEM_CAST", banner_msg)
-        await self.broadcast(session_id, "host:item_cast_banner", {
-            "caster_id": player_id,
-            "caster_name": caster_name,
-            "item_key": item_key,
-            "item_name": item_name,
-            "target_id": target_player_id,
-            "target_name": target_name,
-            "banner_text": banner_msg
-        })
-
-        await self.broadcast_state(session_id)
-        return {"success": True, "item_key": item_key}
-
-    # -------------------------------------------------------------
-    # CLUE REVEAL & BUZZER ARBITRATION
-    # -------------------------------------------------------------
     async def reveal_clue(self, session_id: str):
-        if session_id in self.item_window_tasks and not self.item_window_tasks[session_id].done():
-            self.item_window_tasks[session_id].cancel()
-
         async with get_db() as db:
             await db.execute("""
             UPDATE game_sessions
@@ -565,11 +472,7 @@ class GameManager:
             """, (session_id,))
             await db.commit()
 
-        arbitrator = self.arbitrators.get(session_id)
-        if arbitrator:
-            arbitrator.lock()
-
-        await self.broadcast_state(session_id)
+        await self.arm_buzzers(session_id)
 
     async def arm_buzzers(self, session_id: str):
         state = await self.get_session_state(session_id)
@@ -684,73 +587,27 @@ class GameManager:
         author_name = clue.get("author_name")
         is_author = bool(author_name and target_name.strip().lower() == author_name.strip().lower())
 
-        # Check player's active casts
-        player_casts = [c for c in state.get("active_casts", []) if c["player_id"] == target_pid]
-        has_double_down = any(c["item_key"] == "double_down" for c in player_casts)
-        has_loaded_die = any(c["item_key"] == "loaded_die" for c in player_casts)
-        has_second_wind = any(c["item_key"] == "second_wind" for c in player_casts)
-
-        # Check if player has point_shield in inventory
-        async with get_db() as db:
-            shield_cur = await db.execute("""
-            SELECT id FROM session_inventory
-            WHERE player_id = ? AND item_key = 'point_shield' AND is_consumed = 0
-            LIMIT 1
-            """, (target_pid,))
-            shield_row = await shield_cur.fetchone()
-            has_point_shield = bool(shield_row)
-
-            # Check bounty_mark
-            bounty_cur = await db.execute("""
-            SELECT id FROM session_active_casts
-            WHERE player_id = ? AND item_key = 'bounty_mark' AND clue_id = ?
-            """, (target_pid, clue["id"]))
-            has_bounty_mark = bool(await bounty_cur.fetchone())
-
-        crit_proc = False
         points_delta = 0
-        tokens_delta = 0
-        shield_used = False
 
         if passed:
             multiplier = 1.0
             if is_on_bonus_board or is_event_tile:
                 multiplier = 0.5 if is_author else 1.5
-            if has_double_down:
-                multiplier *= 2.0
-            if has_loaded_die and random.random() < 0.25:
-                multiplier *= 2.0
-                crit_proc = True
-
             points_delta = int(base_points * multiplier)
-            if has_bounty_mark:
-                points_delta += 300
-
-            tokens_delta = 2 if (is_on_bonus_board or is_event_tile) else 1
         else:
-            # Wrong answer
+            # Wrong answer: zero penalty on bonus board / event tile
             if is_on_bonus_board or is_event_tile:
-                # ZERO penalty on bonus board / event tile!
                 points_delta = 0
-            elif has_point_shield:
-                points_delta = 0
-                shield_used = True
-                async with get_db() as db:
-                    await db.execute("UPDATE session_inventory SET is_consumed = 1 WHERE id = ?", (shield_row["id"],))
-                    await db.commit()
             else:
-                multiplier = 2.0 if has_double_down else 1.0
-                points_delta = -int(base_points * multiplier)
+                points_delta = -int(base_points)
 
-            tokens_delta = 1  # Pity token
-
-        # Apply score and token balance updates
+        # Apply score update
         async with get_db() as db:
             await db.execute("""
             UPDATE session_players
-            SET score = score + ?, token_balance = token_balance + ?
+            SET score = score + ?
             WHERE id = ?
-            """, (points_delta, tokens_delta, target_pid))
+            """, (points_delta, target_pid))
 
             # If passed, claim the tile (persists permanently in session_tiles_claimed!)
             if passed:
@@ -760,24 +617,6 @@ class GameManager:
                 """, (session_id, clue["id"], target_pid))
 
             await db.commit()
-
-        # Buff / Debuff Animation Notifications
-        if passed and crit_proc:
-            await self.send_to_player(session_id, target_pid, "buff:crit_proc", {
-                "points_awarded": points_delta
-            })
-            await self.broadcast(session_id, "banner:crit_proc", {
-                "player_id": target_pid,
-                "player_name": target_name,
-                "points": points_delta
-            })
-            await self.log_activity(session_id, "CRIT", f"{target_name} triggered Loaded Die CRITICAL HIT (+{points_delta} pts)!")
-
-        if not passed and shield_used:
-            await self.send_to_player(session_id, target_pid, "buff:shield_break", {
-                "message": "Penalty Absorbed by Point Shield!"
-            })
-            await self.log_activity(session_id, "SHIELD", f"{target_name}'s Point Shield absorbed the penalty ($0 deduction)!")
 
         # Check Round 3 5x5 Bingo Lines if passed
         bingo_lines_completed = 0
@@ -819,9 +658,6 @@ class GameManager:
                 "player_id": target_pid,
                 "player_name": target_name,
                 "points_delta": points_delta,
-                "tokens_delta": tokens_delta,
-                "crit_proc": crit_proc,
-                "shield_used": shield_used,
                 "bingo_lines": bingo_lines_completed
             })
             await self.broadcast_state(session_id)
@@ -829,13 +665,16 @@ class GameManager:
 
         else:
             # Wrong answer: target player is locked out
-            await self.log_activity(session_id, "JUDGE", f"{target_name} answered INCORRECTLY ({points_delta} pts, +{tokens_delta} token)")
+            await self.log_activity(session_id, "JUDGE", f"{target_name} answered INCORRECTLY ({points_delta} pts)")
             arbitrator.remove_candidate(target_pid)
 
             # Check if there is a next candidate in the buzzer queue
             next_candidate = arbitrator.promote_next_candidate()
             if next_candidate:
-                # Promote 2nd/next candidate to active winner!
+                # Promote next candidate in queue to active answerer!
+                # Buzzers remain unlocked for any remaining unbuzzed players to continue queuing!
+                arbitrator.is_unlocked = True
+
                 async with get_db() as db:
                     await db.execute("UPDATE game_sessions SET state = 'BUZZ_LOCKED' WHERE id = ?", (session_id,))
                     await db.commit()
@@ -852,22 +691,18 @@ class GameManager:
                     "player_id": target_pid,
                     "player_name": target_name,
                     "points_delta": points_delta,
-                    "tokens_delta": tokens_delta,
-                    "crit_proc": False,
-                    "shield_used": shield_used,
                     "bingo_lines": 0
                 })
                 await self.broadcast_state(session_id)
                 return {"success": True, "passed": False, "player_id": target_pid, "promoted_next": True, "next_winner_id": next_candidate.player_id}
             else:
-                # No other candidates in queue
-                if has_second_wind:
-                    asyncio.create_task(self._second_wind_timer(session_id, target_pid))
-                    return {"success": True, "passed": False, "player_id": target_pid, "second_wind": True}
+                # No other candidates currently in queue
+                # Buzzers remain open for any remaining contestants who want to buzz in!
+                arbitrator.winner = None
+                arbitrator.is_unlocked = True
 
-                # Keep clue open in CLUE_REVEAL so host can re-unlock buzzers or close clue
                 async with get_db() as db:
-                    await db.execute("UPDATE game_sessions SET state = 'CLUE_REVEAL' WHERE id = ?", (session_id,))
+                    await db.execute("UPDATE game_sessions SET state = 'BUZZ_OPEN' WHERE id = ?", (session_id,))
                     await db.commit()
 
                 await self.broadcast(session_id, "judge:result", {
@@ -875,21 +710,10 @@ class GameManager:
                     "player_id": target_pid,
                     "player_name": target_name,
                     "points_delta": points_delta,
-                    "tokens_delta": tokens_delta,
-                    "crit_proc": False,
-                    "shield_used": shield_used,
                     "bingo_lines": 0
                 })
                 await self.broadcast_state(session_id)
                 return {"success": True, "passed": False, "player_id": target_pid, "queue_empty": True}
-
-    async def _second_wind_timer(self, session_id: str, player_id: str):
-        await self.send_to_player(session_id, player_id, "hud:second_wind", {"duration_seconds": 3.0})
-        await asyncio.sleep(3.0)
-        async with get_db() as db:
-            await db.execute("UPDATE game_sessions SET state = 'BOARD' WHERE id = ?", (session_id,))
-            await db.commit()
-        await self.broadcast_state(session_id)
 
     # -------------------------------------------------------------
     # ROUND 3: 5x5 BINGO LINE DETECTOR ($1,000 BONUS)
@@ -897,7 +721,8 @@ class GameManager:
     async def _check_bingo_lines(self, session_id: str, player_id: str) -> int:
         """
         Checks if player just completed any 5-in-a-row line (row, col, diagonal).
-        Accurately awards $1,000 per unique completed line upon the 5th tile claim.
+        All claimed tiles on the 5x5 board contribute towards forming lines.
+        The contestant who answers the completing (5th) tile gets the $1,000 bonus.
         Broadcasts winning tile coordinates so animated glowing lines render.
         """
         async with get_db() as db:
@@ -905,15 +730,15 @@ class GameManager:
             SELECT c.row_idx, c.col_idx
             FROM session_tiles_claimed stc
             JOIN clues c ON c.id = stc.clue_id
-            WHERE stc.session_id = ? AND stc.claimed_by_player_id = ?
-            """, (session_id, player_id))
+            WHERE stc.session_id = ?
+            """, (session_id,))
             claimed_tiles = {(r["row_idx"], r["col_idx"]) for r in await cursor.fetchall()}
 
-            # Check lines already awarded
+            # Check lines already awarded in this session (by anyone)
             bl_cur = await db.execute("""
             SELECT line_key FROM session_bingo_lines
-            WHERE session_id = ? AND player_id = ?
-            """, (session_id, player_id))
+            WHERE session_id = ?
+            """, (session_id,))
             existing_lines = {r["line_key"] for r in await bl_cur.fetchall()}
 
             p_cur = await db.execute("SELECT display_name FROM session_players WHERE id = ?", (player_id,))
@@ -978,52 +803,6 @@ class GameManager:
     # -------------------------------------------------------------
     # ROUND 4: HOT POTATO GAUNTLET (90s MASTER TIMER + QUEUE)
     # -------------------------------------------------------------
-    async def start_hot_potato_round(self, session_id: str):
-        async with get_db() as db:
-            # Official Team Reveal at Round 4 start
-            p_cursor = await db.execute("SELECT id, display_name, secret_team_id, score FROM session_players WHERE session_id = ? ORDER BY score DESC", (session_id,))
-            players = [dict(r) for r in await p_cursor.fetchall()]
-
-            # Reset hot potato eligibility
-            await db.execute("UPDATE session_players SET is_hot_potato_eligible = 1 WHERE session_id = ?", (session_id,))
-
-            starting_holder_id = players[0]["id"] if players else None
-
-            # Get first clue
-            clue_cur = await db.execute("""
-            SELECT c.* FROM clues c
-            JOIN categories cat ON cat.id = c.category_id
-            JOIN template_rounds tr ON tr.id = cat.round_id
-            JOIN game_sessions gs ON gs.template_id = tr.template_id
-            WHERE gs.id = ? AND tr.round_number = 4
-            ORDER BY c.row_idx ASC LIMIT 1
-            """, (session_id,))
-            first_clue = await clue_cur.fetchone()
-            first_clue_id = first_clue["id"] if first_clue else None
-
-            await db.execute("""
-            UPDATE game_sessions
-            SET state = 'HOT_POTATO',
-                current_round_idx = 4,
-                hot_potato_holder_id = ?,
-                hot_potato_timer_remaining_ms = 90000,
-                active_clue_id = ?
-            WHERE id = ?
-            """, (starting_holder_id, first_clue_id, session_id))
-            await db.commit()
-
-        # Broadcast Official Team Reveal
-        await self.broadcast(session_id, "teams:reveal", {
-            "teams": self._group_teams(players)
-        })
-
-        # Start 90s countdown ticker
-        if session_id in self.hot_potato_tasks and not self.hot_potato_tasks[session_id].done():
-            self.hot_potato_tasks[session_id].cancel()
-
-        self.hot_potato_tasks[session_id] = asyncio.create_task(self._run_hot_potato_timer(session_id))
-        await self.broadcast_state(session_id)
-
     def _group_teams(self, players: List[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
         teams: Dict[int, List[Dict[str, Any]]] = {}
         for p in players:
@@ -1032,94 +811,6 @@ class GameManager:
                 teams[tid] = []
             teams[tid].append(p)
         return teams
-
-    async def _run_hot_potato_timer(self, session_id: str):
-        try:
-            while True:
-                await asyncio.sleep(1.0)
-                async with get_db() as db:
-                    s_cur = await db.execute("SELECT state, hot_potato_timer_remaining_ms, hot_potato_holder_id FROM game_sessions WHERE id = ?", (session_id,))
-                    session = await s_cur.fetchone()
-                    if not session or session["state"] != "HOT_POTATO":
-                        break
-
-                    remaining = session["hot_potato_timer_remaining_ms"] - 1000
-                    if remaining <= 0:
-                        # BOMB DETONATION! Holder takes -$1500 points
-                        holder_id = session["hot_potato_holder_id"]
-                        if holder_id:
-                            await db.execute("UPDATE session_players SET score = score - 1500 WHERE id = ?", (holder_id,))
-                        await db.execute("""
-                        UPDATE game_sessions
-                        SET hot_potato_timer_remaining_ms = 0, state = 'FINAL'
-                        WHERE id = ?
-                        """, (session_id,))
-                        await db.commit()
-
-                        await self.broadcast(session_id, "hot_potato:detonation", {
-                            "holder_id": holder_id,
-                            "penalty": -1500
-                        })
-                        await self.broadcast_state(session_id)
-                        break
-                    else:
-                        await db.execute("UPDATE game_sessions SET hot_potato_timer_remaining_ms = ? WHERE id = ?", (remaining, session_id))
-                        await db.commit()
-                        await self.broadcast(session_id, "hot_potato:tick", {"remaining_ms": remaining})
-        except asyncio.CancelledError:
-            pass
-
-    async def pass_hot_potato(self, session_id: str, from_player_id: str, target_player_id: Optional[str] = None):
-        """Topic Peek & Pass with anti-tunneling pool logic."""
-        async with get_db() as db:
-            # Mark from_player ineligible until cycle completes
-            await db.execute("UPDATE session_players SET is_hot_potato_eligible = 0 WHERE id = ?", (from_player_id,))
-
-            # Find eligible targets
-            cur = await db.execute("SELECT id FROM session_players WHERE session_id = ? AND is_hot_potato_eligible = 1", (session_id,))
-            eligible = [r["id"] for r in await cur.fetchall()]
-
-            # If all players answered, reset pool except for from_player
-            if not eligible:
-                await db.execute("UPDATE session_players SET is_hot_potato_eligible = 1 WHERE session_id = ? AND id != ?", (session_id, from_player_id))
-                cur2 = await db.execute("SELECT id FROM session_players WHERE session_id = ? AND is_hot_potato_eligible = 1", (session_id,))
-                eligible = [r["id"] for r in await cur2.fetchall()]
-
-            # Choose target (or random if not specified / invalid)
-            if not target_player_id or target_player_id not in eligible:
-                target_player_id = random.choice(eligible) if eligible else from_player_id
-
-            # Advance to next clue in deck
-            clue_cur = await db.execute("""
-            SELECT c.* FROM clues c
-            JOIN categories cat ON cat.id = c.category_id
-            JOIN template_rounds tr ON tr.id = cat.round_id
-            JOIN game_sessions gs ON gs.template_id = tr.template_id
-            LEFT JOIN session_tiles_claimed stc ON stc.clue_id = c.id AND stc.session_id = ?
-            WHERE gs.id = ? AND tr.round_number = 4 AND stc.clue_id IS NULL
-            ORDER BY c.row_idx ASC LIMIT 1
-            """, (session_id, session_id))
-            next_clue = await clue_cur.fetchone()
-            next_clue_id = next_clue["id"] if next_clue else None
-
-            await db.execute("""
-            UPDATE game_sessions
-            SET hot_potato_holder_id = ?, active_clue_id = ?
-            WHERE id = ?
-            """, (target_player_id, next_clue_id, session_id))
-            await db.commit()
-
-        # Send Topic Peek privately to target player
-        if next_clue and next_clue["topic_preview"]:
-            await self.send_to_player(session_id, target_player_id, "hot_potato:topic_peek", {
-                "topic_preview": next_clue["topic_preview"]
-            })
-
-        await self.broadcast(session_id, "hot_potato:passed", {
-            "from_player_id": from_player_id,
-            "target_player_id": target_player_id
-        })
-        await self.broadcast_state(session_id)
 
     # -------------------------------------------------------------
     # SHOP INTERMISSION & PURCHASES
@@ -1236,7 +927,7 @@ class GameManager:
             arbitrator.candidates.append(candidate)
 
         arbitrator.winner = candidate
-        arbitrator.is_unlocked = False
+        arbitrator.is_unlocked = True
 
         async with get_db() as db:
             await db.execute("UPDATE game_sessions SET state = 'BUZZ_LOCKED' WHERE id = ?", (session_id,))
@@ -1261,11 +952,6 @@ class GameManager:
             s_row = await s_cur.fetchone()
             current = s_row["current_round_idx"] if s_row else 1
             next_idx = target_round_idx if target_round_idx is not None else current + 1
-
-            if next_idx == 4:
-                # Hot potato round special init
-                await self.start_hot_potato_round(session_id)
-                return
 
             await db.execute("""
             UPDATE game_sessions

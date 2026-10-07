@@ -6,7 +6,7 @@ interface ContestantsTopRowProps {
   currentPlayerId?: string;
   activePickerId?: string | null;
   buzzWinnerId?: string | null;
-  hotPotatoHolderId?: string | null;
+  buzzQueue?: any[];
   onSelectPicker?: (playerId: string) => void;
   className?: string;
 }
@@ -16,7 +16,7 @@ export const ContestantsTopRow: React.FC<ContestantsTopRowProps> = ({
   currentPlayerId,
   activePickerId,
   buzzWinnerId,
-  hotPotatoHolderId,
+  buzzQueue = [],
   onSelectPicker,
   className = '',
 }) => {
@@ -31,7 +31,8 @@ export const ContestantsTopRow: React.FC<ContestantsTopRowProps> = ({
           const isMe = p.id === currentPlayerId;
           const isPicker = p.id === activePickerId;
           const isBuzzWinner = p.id === buzzWinnerId;
-          const isBombHolder = p.id === hotPotatoHolderId;
+          const queueIndex = buzzQueue?.findIndex((c: any) => c.player_id === p.id);
+          const isQueued = queueIndex !== undefined && queueIndex >= 0 && !isBuzzWinner;
 
           return (
             <div
@@ -44,8 +45,8 @@ export const ContestantsTopRow: React.FC<ContestantsTopRowProps> = ({
                   ? 'bg-amber-950/90 border-2 border-amber-400 text-white shadow-amber-500/20 ring-1 ring-amber-400'
                   : isBuzzWinner
                   ? 'bg-emerald-950/90 border-2 border-emerald-400 text-white shadow-emerald-500/30'
-                  : isBombHolder
-                  ? 'bg-red-950/90 border-2 border-red-500 text-white animate-pulse'
+                  : isQueued
+                  ? 'bg-sky-950/90 border-2 border-sky-400 text-white'
                   : 'bg-[#1D103A]/90 border border-white/15 text-slate-200 hover:border-white/30'
               }`}
             >
@@ -73,24 +74,18 @@ export const ContestantsTopRow: React.FC<ContestantsTopRowProps> = ({
               )}
               {isBuzzWinner && (
                 <span className="px-1.5 py-0.2 rounded-full bg-emerald-400 text-black text-[9px] font-black uppercase flex items-center gap-0.5 animate-pulse">
-                  <Zap className="w-2.5 h-2.5 fill-black" /> Buzz
+                  <Zap className="w-2.5 h-2.5 fill-black" /> #1 Buzz
                 </span>
               )}
-              {isBombHolder && (
-                <span className="px-1.5 py-0.2 rounded-full bg-red-500 text-white text-[9px] font-black uppercase flex items-center gap-0.5">
-                  <Bomb className="w-2.5 h-2.5" /> Bomb
+              {isQueued && (
+                <span className="px-1.5 py-0.2 rounded-full bg-sky-500 text-black text-[9px] font-black uppercase flex items-center gap-0.5">
+                  #{queueIndex + 1}
                 </span>
               )}
 
               {/* Score Currency ($) */}
-              <span className="font-bold text-emerald-400 text-xs px-1.5 py-0.5 rounded bg-black/40 border border-emerald-500/30">
+              <span className="font-bold text-emerald-400 text-xs px-2 py-0.5 rounded bg-black/40 border border-emerald-500/30">
                 ${(p.score ?? 0).toLocaleString()}
-              </span>
-
-              {/* Bounty Tokens */}
-              <span className="flex items-center gap-0.5 text-amber-300 font-bold px-1.5 py-0.5 rounded bg-black/40 border border-amber-500/30">
-                <Coins className="w-3 h-3 text-amber-400" />
-                {p.token_balance ?? 0}
               </span>
             </div>
           );

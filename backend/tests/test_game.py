@@ -61,32 +61,48 @@ async def test_bingo_line_detector():
     assert player["score"] >= 1000
 
 @pytest.mark.asyncio
-async def test_hot_potato_anti_tunneling():
+async def test_bingo_communal_line_completion():
     await init_db()
     session_id = await game_manager.create_session()
     p1 = await game_manager.join_player(session_id, "P1")
     p2 = await game_manager.join_player(session_id, "P2")
-    p3 = await game_manager.join_player(session_id, "P3")
+    pid1 = p1["player_id"]
+    pid2 = p2["player_id"]
 
-    await game_manager.start_hot_potato_round(session_id)
-    state = await game_manager.get_session_state(session_id)
-    assert state["state"] == "HOT_POTATO"
-
-    holder1 = state["hot_potato"]["holder_id"]
-    assert holder1 is not None
-
-    # Pass potato from holder1 to p2 (if eligible)
-    target = p2["player_id"] if holder1 != p2["player_id"] else p3["player_id"]
-    await game_manager.pass_hot_potato(session_id, holder1, target)
-
-    state2 = await game_manager.get_session_state(session_id)
-    assert state2["hot_potato"]["holder_id"] == target
-
-    # holder1 should now be ineligible in this cycle
     async with get_db() as db:
-        cur = await db.execute("SELECT is_hot_potato_eligible FROM session_players WHERE id = ?", (holder1,))
-        row = await cur.fetchone()
-        assert row["is_hot_potato_eligible"] == 0
+        await db.execute("INSERT OR REPLACE INTO template_rounds (id, template_id, round_number, round_name, board_type) VALUES ('mock-r3-comm', 'default-ultimate-jeopardy', 3, 'Bingo', 'bingo_5x5')")
+        await db.execute("INSERT OR REPLACE INTO categories (id, round_id, name, display_order) VALUES ('mock-cat-comm', 'mock-r3-comm', 'Mock Bingo Comm', 0)")
+        # Tiles 0..3 claimed by P1
+        for c in range(4):
+            clue_id = f"mock-bingo-comm-r0-c{c}"
+            await db.execute("""
+            INSERT OR REPLACE INTO clues (id, category_id, clue_markdown, correct_answer, base_points, row_idx, col_idx)
+            VALUES (?, 'mock-cat-comm', 'Q', 'A', 300, 0, ?)
+            """, (clue_id, c))
+            await db.execute("""
+            INSERT OR REPLACE INTO session_tiles_claimed (session_id, clue_id, claimed_by_player_id)
+            VALUES (?, ?, ?)
+            """, (session_id, clue_id, pid1))
+
+        # 5th tile (col 4) claimed by P2
+        clue_5 = "mock-bingo-comm-r0-c4"
+        await db.execute("""
+        INSERT OR REPLACE INTO clues (id, category_id, clue_markdown, correct_answer, base_points, row_idx, col_idx)
+        VALUES (?, 'mock-cat-comm', 'Q', 'A', 300, 0, 4)
+        """, (clue_5,))
+        await db.execute("""
+        INSERT OR REPLACE INTO session_tiles_claimed (session_id, clue_id, claimed_by_player_id)
+        VALUES (?, ?, ?)
+        """, (session_id, clue_5, pid2))
+        await db.commit()
+
+    # P2 completed the 5th tile -> P2 gets the line completed bonus!
+    lines = await game_manager._check_bingo_lines(session_id, pid2)
+    assert lines == 1
+
+    p2_state = await game_manager.get_session_state(session_id)
+    p2_data = next(p for p in p2_state["players"] if p["id"] == pid2)
+    assert p2_data["score"] >= 1000
 
 @pytest.mark.asyncio
 async def test_turn_based_selection_and_reveal():
@@ -115,9 +131,10 @@ async def test_turn_based_selection_and_reveal():
     assert rev_res["success"] is True
 
     state_rev = await game_manager.get_session_state(session_id)
-    assert state_rev["state"] in ("ITEM_WINDOW", "BONUS_MINE_EXPLODE")
+    assert state_rev["state"] in ("BUZZ_OPEN", "BONUS_MINE_EXPLODE")
     assert state_rev["active_clue_id"] == clue_id
     assert state_rev["selected_tile_id"] is None
+    assert state_rev["buzzer"]["is_unlocked"] is True
 
 @pytest.mark.asyncio
 async def test_bingo_deduplication():
@@ -164,7 +181,7 @@ async def test_judge_answer_and_return_to_board():
     await game_manager.reveal_selected_tile(session_id)
 
     revealed_state = await game_manager.get_session_state(session_id)
-    assert revealed_state["state"] == "ITEM_WINDOW"
+    assert revealed_state["state"] in ("BUZZ_OPEN", "BONUS_MINE_EXPLODE")
     assert revealed_state["active_clue_id"] == first_clue_id
 
     # Award points directly to Alice
@@ -321,7 +338,63 @@ async def test_buzzer_queue_and_shop_resumption():
     state = await game_manager.get_session_state(session_id)
     assert len(state["activity_log"]) > 0
     event_types = [entry["event_type"] for entry in state["activity_log"]]
-    assert "SHOP" in event_types or "BUZZ" in event_types
+    assert "BUZZ" in event_types
+
+@pytest.mark.asyncio
+async def test_buzzer_queue_promotion_on_wrong_answer():
+    await init_db()
+    session_id = await game_manager.create_session()
+    p1 = await game_manager.join_player(session_id, "Buzzer1")
+    p2 = await game_manager.join_player(session_id, "Buzzer2")
+    pid1 = p1["player_id"]
+    pid2 = p2["player_id"]
+
+    await game_manager.start_game(session_id)
+    state = await game_manager.get_session_state(session_id)
+    clue_id = state["categories"][0]["clues"][0]["id"]
+    await game_manager.pick_tile(session_id, clue_id, pid1)
+    await game_manager.reveal_selected_tile(session_id)
+
+    # Buzzers should automatically be unlocked!
+    rev_state = await game_manager.get_session_state(session_id)
+    assert rev_state["buzzer"]["is_unlocked"] is True
+
+    # P1 buzzes with 120ms reaction
+    r1 = game_manager.handle_buzz(session_id, pid1, "Buzzer1", 120)
+    assert r1["accepted"] is True
+
+    # Resolve arbitration window
+    arbitrator = game_manager.arbitrators[session_id]
+    await asyncio.sleep(0.3)
+    assert arbitrator.winner is not None
+    assert arbitrator.winner.player_id == pid1
+    # Buzzers must remain unlocked for other players to queue!
+    assert arbitrator.is_unlocked is True
+
+    # P2 buzzes after P1 is winner -> P2 is queued!
+    r2 = game_manager.handle_buzz(session_id, pid2, "Buzzer2", 250)
+    assert r2["accepted"] is True
+    assert r2.get("queued") is True
+    assert r2.get("position") == 2
+
+    # Judge P1 wrong -> P2 must be automatically promoted to winner!
+    wrong_res = await game_manager.judge_answer(session_id, passed=False, player_id=pid1)
+    assert wrong_res["success"] is True
+    assert wrong_res["promoted_next"] is True
+    assert wrong_res["next_winner_id"] == pid2
+
+    # Verify arbitrator state: P2 is now winner, P1 is locked out
+    assert arbitrator.winner.player_id == pid2
+    assert pid1 in arbitrator.locked_out_player_ids
+    # Buzzers still unlocked for any 3rd contestant
+    assert arbitrator.is_unlocked is True
+
+    # Judge P2 correct -> game awards points and returns to BOARD
+    right_res = await game_manager.judge_answer(session_id, passed=True, player_id=pid2)
+    assert right_res["success"] is True
+    final_state = await game_manager.get_session_state(session_id)
+    assert final_state["state"] == "BOARD"
+
 
 
 

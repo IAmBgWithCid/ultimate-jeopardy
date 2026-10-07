@@ -1,12 +1,11 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StandardBoard } from '../components/boards/StandardBoard';
 import { BonusBoardOverlay } from '../components/boards/BonusBoardOverlay';
 import { BingoBoard } from '../components/boards/BingoBoard';
-import { HotPotatoBoard } from '../components/boards/HotPotatoBoard';
 import { ClueModal } from '../components/cards/ClueModal';
 import { ContestantsTopRow } from '../components/scoreboard/ContestantsTopRow';
 import { ASSET_MANIFEST } from '../constants/assetManifest';
-import { ArrowLeft, Zap, Trophy, Coins } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 interface TvViewProps {
   roomCode: string;
@@ -15,9 +14,7 @@ interface TvViewProps {
 
 export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
   const [gameState, setGameState] = useState<any>(null);
-  const [itemBanners, setItemBanners] = useState<string[]>([]);
   const [bingoBanner, setBingoBanner] = useState<any>(null);
-
   const [mediaSyncState, setMediaSyncState] = useState<any>(null);
 
   useEffect(() => {
@@ -32,8 +29,6 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
         const msg = JSON.parse(event.data);
         if (msg.type === 'state:update') {
           setGameState(msg.data);
-        } else if (msg.type === 'host:item_cast_banner') {
-          setItemBanners((prev) => [...prev.slice(-4), msg.data.banner_text]);
         } else if (msg.type === 'bingo:bonus') {
           setBingoBanner(msg.data);
           setTimeout(() => setBingoBanner(null), 6000);
@@ -53,8 +48,7 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
   const activeClue = gameState?.active_clue;
   const isBonusExplode = gameState?.state === 'BONUS_MINE_EXPLODE';
   const isBonusBoard = Boolean(gameState?.is_bonus_board) || gameState?.state === 'BONUS_BOARD';
-  const isShop = gameState?.state === 'SHOP';
-  const showClueModal = activeClue && gameState?.state !== 'BONUS_MINE_EXPLODE' && gameState?.state !== 'BOARD' && gameState?.state !== 'BONUS_BOARD' && !isShop;
+  const showClueModal = activeClue && gameState?.state !== 'BONUS_MINE_EXPLODE' && gameState?.state !== 'BOARD' && gameState?.state !== 'BONUS_BOARD';
 
   const getBgStyle = (rawVal: string) => {
     if (!rawVal) return {};
@@ -71,11 +65,7 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
 
   const currentBg = boardType === 'bingo_5x5'
     ? ASSET_MANIFEST.bg_bingo_board.urlOrSvg
-    : boardType === 'hot_potato'
-    ? ASSET_MANIFEST.bg_hot_potato.urlOrSvg
     : ASSET_MANIFEST.bg_main_board.urlOrSvg;
-
-  const bgStyle = getBgStyle(currentBg);
 
   const activePickerId = gameState?.active_picker_id;
   const activePicker = gameState?.players?.find((p: any) => p.id === activePickerId);
@@ -88,7 +78,7 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
       className="min-h-screen text-slate-100 flex flex-col justify-between overflow-x-hidden select-none bg-cover bg-center bg-no-repeat fixed inset-0 overflow-y-auto"
       style={{ backgroundImage: `url('/assets/backgrounds/bg-board.png')` }}
     >
-      {/* Top TV Header: Room, Round Name, Item Cast Banners */}
+      {/* Top TV Header: Room, Round Name */}
       <header className="px-6 py-3 bg-[#130924]/90 border-b border-white/20 backdrop-blur-md flex items-center justify-between sticky top-0 z-40 shadow-xl">
         <div className="flex items-center gap-3">
           <button
@@ -107,22 +97,14 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
             </div>
           </div>
         </div>
-
-        {/* Live Item Cast Banner ticker */}
-        {itemBanners.length > 0 && (
-          <div className="flex items-center gap-2 px-4 py-1.5 bg-gradient-to-r from-red-600 via-amber-600 to-purple-600 rounded-full text-white font-mono text-xs font-bold animate-pulse shadow-lg">
-            <Zap className="w-4 h-4" />
-            <span>{itemBanners[itemBanners.length - 1]}</span>
-          </div>
-        )}
       </header>
 
-      {/* Contestants Money & Tokens Row at Top */}
+      {/* Contestants Row at Top */}
       <ContestantsTopRow
         players={gameState?.players || []}
         activePickerId={activePickerId}
         buzzWinnerId={gameState?.buzzer?.winner?.player_id}
-        hotPotatoHolderId={gameState?.hot_potato?.holder_id}
+        buzzQueue={gameState?.buzzer?.queue || []}
       />
 
       {/* 3D Bubble Marquee Center Title */}
@@ -135,13 +117,6 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
         {isBonusBoard && (
           <div className="mt-2 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-500/20 border border-amber-400 text-amber-300 font-mono text-xs md:text-sm font-bold shadow-lg">
             <span>⭐ CONTESTANT QUESTIONS • NO PENALTIES • 400-600 PTS • 1.5s AUTHOR DELAY</span>
-          </div>
-        )}
-
-        {/* Shop Intermission Banner */}
-        {isShop && (
-          <div className="mt-2 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-purple-500/20 border border-purple-400 text-purple-300 font-mono text-xs md:text-sm font-bold animate-pulse shadow-lg">
-            <span>🛍️ SHOP INTERMISSION • PLAYERS UPGRADING INVENTORY</span>
           </div>
         )}
 
@@ -177,14 +152,6 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
             disabled={true}
             bingoBanner={bingoBanner}
           />
-        ) : boardType === 'hot_potato' ? (
-          <HotPotatoBoard
-            timerRemainingMs={gameState?.hot_potato?.timer_remaining_ms || 90000}
-            holderId={gameState?.hot_potato?.holder_id}
-            players={gameState?.players || []}
-            activeClue={activeClue}
-            isHost={false}
-          />
         ) : (
           <StandardBoard
             categories={gameState?.categories || []}
@@ -196,7 +163,7 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
         )}
       </main>
 
-      {/* Bonus Minefield Detonation Cutscene (Refinement 4) */}
+      {/* Bonus Minefield Detonation Cutscene */}
       {isBonusExplode && activeClue && (
         <BonusBoardOverlay
           clue={activeClue}
@@ -205,14 +172,13 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
         />
       )}
 
-      {/* Standard Clue Presentation Modal (Spectator TV Mode: Answers Hidden) */}
+      {/* Standard Clue Presentation Modal (Spectator TV Mode: Question & Media Fully Visible!) */}
       {showClueModal && (
         <ClueModal
           clue={activeClue}
           categoryName={activeClue.category_name || 'Jeopardy'}
           isHost={false}
           buzzerState={gameState?.buzzer}
-          activeItemBanners={itemBanners}
           mediaSyncState={mediaSyncState}
         />
       )}
@@ -220,7 +186,7 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
       {/* Bottom Spectator Scoreboard Bar */}
       <footer className="px-6 py-4 bg-slate-950/90 border-t border-slate-800 backdrop-blur-md">
         <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-4">
-          {(gameState?.players || []).map((player: any, idx: number) => (
+          {(gameState?.players || []).map((player: any) => (
             <div
               key={player.id}
               className="flex items-center gap-3 px-4 py-2 rounded-xl bg-slate-900 border border-slate-700/80 shadow-md"
@@ -233,18 +199,13 @@ export const TvView: React.FC<TvViewProps> = ({ roomCode, onLeave }) => {
                 <span className="text-xs font-bold text-slate-200 block truncate max-w-[120px]">
                   {player.display_name}
                 </span>
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`font-mono text-sm font-black ${
-                      player.score >= 0 ? 'text-emerald-400' : 'text-rose-400'
-                    }`}
-                  >
-                    ${player.score.toLocaleString()}
-                  </span>
-                  <span className="flex items-center gap-0.5 text-amber-400 text-xs font-mono font-bold">
-                    <Coins className="w-3 h-3" /> {player.token_balance}
-                  </span>
-                </div>
+                <span
+                  className={`font-mono text-sm font-black ${
+                    player.score >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                  }`}
+                >
+                  ${player.score.toLocaleString()}
+                </span>
               </div>
             </div>
           ))}

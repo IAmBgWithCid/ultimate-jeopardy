@@ -93,10 +93,6 @@ class BuzzerArbitrator:
                 "reason": f"Inhuman reaction time ({reaction_delta_ms}ms < {MIN_HUMAN_REACTION_MS}ms threshold)"
             }
 
-        # If winner already resolved
-        if self.winner is not None:
-            return {"accepted": False, "reason": "Buzzer already awarded"}
-
         # Prevent duplicate buzz from same player
         if any(c.player_id == player_id for c in self.candidates):
             return {"accepted": False, "reason": "Buzz already registered"}
@@ -112,6 +108,17 @@ class BuzzerArbitrator:
             is_author=is_author
         )
         self.candidates.append(candidate)
+
+        # If winner already chosen, immediately notify queue update
+        if self.winner is not None:
+            if self.on_arbitration_complete:
+                asyncio.create_task(self.on_arbitration_complete(self.winner, self.candidates))
+            return {
+                "accepted": True,
+                "reaction_delta_ms": reaction_delta_ms,
+                "queued": True,
+                "position": len(self.candidates)
+            }
 
         # Start 250ms arbitration buffer window on first valid buzz
         if self.arbitration_task is None or self.arbitration_task.done():
@@ -137,7 +144,8 @@ class BuzzerArbitrator:
             key=lambda c: (c.reaction_delta_ms, c.received_at_monotonic)
         )
         self.winner = sorted_candidates[0]
-        self.is_unlocked = False
+        # Keep buzzers unlocked for remaining contestants who want to queue!
+        self.is_unlocked = True
 
         if self.on_arbitration_complete:
             asyncio.create_task(self.on_arbitration_complete(self.winner, self.candidates))

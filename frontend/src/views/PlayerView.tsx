@@ -1,15 +1,10 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { BuzzerButton } from '../components/buzzer/BuzzerButton';
-import { PlayerScoreboardHUD } from '../components/scoreboard/PlayerScoreboardHUD';
-import { DebuffOverlay, DebuffState } from '../components/animations/DebuffOverlay';
-import { ItemCastDrawer } from '../components/shop/ItemCastDrawer';
-import { ShopModal } from '../components/shop/ShopModal';
-import { ShopItemData } from '../components/cards/ItemCard';
 import { StandardBoard } from '../components/boards/StandardBoard';
 import { BingoBoard } from '../components/boards/BingoBoard';
 import { MarkdownViewer } from '../components/markdown/MarkdownViewer';
 import { ContestantsTopRow } from '../components/scoreboard/ContestantsTopRow';
-import { Coins, Zap, Shield, Users, ArrowLeft, FolderLock, Sparkles, CheckCircle2 } from 'lucide-react';
+import { Zap, ArrowLeft, FolderLock, Sparkles, Clock, Lock } from 'lucide-react';
 
 interface PlayerViewProps {
   roomCode: string;
@@ -27,24 +22,12 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
   onLeave,
 }) => {
   const [gameState, setGameState] = useState<any>(null);
-  const [shopCatalog, setShopCatalog] = useState<ShopItemData[]>([]);
-  const [debuff, setDebuff] = useState<DebuffState>({ type: null });
-  const [isShopOpen, setIsShopOpen] = useState(false);
   const [secretPartner, setSecretPartner] = useState<string | null>(null);
   const [pingMs, setPingMs] = useState(18);
-  const [topicPeek, setTopicPeek] = useState<string | null>(null);
   const [mediaSyncState, setMediaSyncState] = useState<any>(null);
 
   const socketRef = useRef<WebSocket | null>(null);
   const pingStartRef = useRef<number>(0);
-
-  // Fetch shop catalog on mount
-  useEffect(() => {
-    fetch('/api/shop/items')
-      .then((res) => res.json())
-      .then((data) => setShopCatalog(data.items || []))
-      .catch(() => {});
-  }, []);
 
   // WebSocket Connection
   useEffect(() => {
@@ -77,27 +60,8 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
           setPingMs(Math.round(rtt / 2));
         } else if (type === 'state:update') {
           setGameState(data);
-          if (data.state === 'SHOP') {
-            setIsShopOpen(true);
-          } else {
-            setIsShopOpen(false);
-          }
         } else if (type === 'media:sync') {
           setMediaSyncState(data);
-        } else if (type === 'debuff:static_jammer') {
-          setDebuff({ type: 'static_jammer', data });
-        } else if (type === 'buff:shield_break') {
-          setDebuff({ type: 'shield_break', data });
-        } else if (type === 'buff:crit_proc') {
-          setDebuff({ type: 'crit_proc', data });
-        } else if (type === 'intel:dossier_reveal') {
-          setSecretPartner(data.partner_name);
-          setDebuff({ type: 'dossier_reveal', data });
-        } else if (type === 'intel:radio_reveal') {
-          setSecretPartner(data.partner_name);
-          setDebuff({ type: 'dossier_reveal', data });
-        } else if (type === 'hot_potato:topic_peek') {
-          setTopicPeek(data.topic_preview);
         } else if (type === 'teams:reveal') {
           const myTeam = Object.values(data.teams || {}).find((members: any) =>
             members.some((m: any) => m.id === playerId)
@@ -136,12 +100,32 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
     }
   }, []);
 
+  const currentPlayer = gameState?.players?.find((p: any) => p.id === playerId);
+  const myScore = currentPlayer?.score ?? 0;
+
+  const isBuzzerUnlocked = Boolean(gameState?.buzzer?.is_unlocked);
+  const activeClue = gameState?.active_clue;
+
+  // Buzzer states & queue tracking
+  const isBuzzWinner = gameState?.buzzer?.winner?.player_id === playerId;
+  const isCandidate = Boolean(gameState?.buzzer?.candidates?.some((c: any) => c.player_id === playerId));
+  const hasAlreadyBuzzed = isBuzzWinner || isCandidate;
+  const isLockedOut = Boolean(gameState?.buzzer?.locked_out_player_ids?.includes(playerId));
+
+  const queueIndex = gameState?.buzzer?.queue?.findIndex((c: any) => c.player_id === playerId);
+  const queuePosition = queueIndex !== undefined && queueIndex >= 0 ? queueIndex + 1 : null;
+
+  const isAuthorLocked = Boolean(
+    activeClue?.is_bonus_mine &&
+    activeClue?.author_name &&
+    activeClue?.author_name.trim().toLowerCase() === playerName.trim().toLowerCase()
+  );
+
   // Global Spacebar Key Listener
   useEffect(() => {
     const handleGlobalSpaceKey = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !e.repeat) {
-        // Prevent default scrolling on spacebar
-        if (gameState?.state === 'BUZZ_OPEN') {
+        if (isBuzzerUnlocked && !hasAlreadyBuzzed && !isLockedOut) {
           e.preventDefault();
           handleBuzz(120);
         }
@@ -150,7 +134,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
 
     window.addEventListener('keydown', handleGlobalSpaceKey);
     return () => window.removeEventListener('keydown', handleGlobalSpaceKey);
-  }, [gameState?.state, handleBuzz]);
+  }, [isBuzzerUnlocked, hasAlreadyBuzzed, isLockedOut, handleBuzz]);
 
   // Player picks a tile on board
   const handlePlayerTileClick = (clueId: string) => {
@@ -166,63 +150,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
     }
   };
 
-  // Item Cast Handler
-  const handleCastItem = (itemKey: string, targetPlayerId?: string) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(
-        JSON.stringify({
-          type: 'item:cast',
-          data: { item_key: itemKey, target_player_id: targetPlayerId }
-        })
-      );
-    }
-  };
-
-  // Shop Buy Handler
-  const handleBuyItem = (itemKey: string) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(
-        JSON.stringify({
-          type: 'shop:buy',
-          data: { item_key: itemKey }
-        })
-      );
-    }
-  };
-
-  // Hot Potato Pass Handler
-  const handlePassPotato = (targetPlayerId: string) => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(
-        JSON.stringify({
-          type: 'hot_potato:pass',
-          data: { target_player_id: targetPlayerId }
-        })
-      );
-      setTopicPeek(null);
-    }
-  };
-
-  const currentPlayer = gameState?.players?.find((p: any) => p.id === playerId);
-  const myScore = currentPlayer?.score ?? 0;
-  const myTokens = currentPlayer?.token_balance ?? 3;
-  const myInventory = currentPlayer?.inventory ?? [];
-
-  const isBuzzerUnlocked = Boolean(gameState?.buzzer?.is_unlocked);
-  const isJammed = debuff.type === 'static_jammer';
-
-  const activeClue = gameState?.active_clue;
-  const isAuthorLocked = Boolean(
-    activeClue?.is_bonus_mine &&
-    activeClue?.author_name &&
-    activeClue?.author_name.trim().toLowerCase() === playerName.trim().toLowerCase()
-  );
-
-  const isHotPotatoRound = gameState?.current_round?.board_type === 'hot_potato';
-  const hotPotatoHolderId = gameState?.hot_potato?.holder_id;
-  const isItemWindow = gameState?.state === 'ITEM_WINDOW';
   const isBonusBoard = Boolean(gameState?.is_bonus_board) || gameState?.state === 'BONUS_BOARD';
-  const isShop = gameState?.state === 'SHOP';
   const isBoardPhase = gameState?.state === 'BOARD' || gameState?.state === 'BONUS_BOARD';
   const isLobby = gameState?.state === 'LOBBY';
 
@@ -238,10 +166,7 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
       className="min-h-screen flex flex-col justify-between text-slate-100 select-none pb-6 bg-cover bg-center bg-no-repeat fixed inset-0 overflow-y-auto"
       style={{ backgroundImage: `url('/assets/backgrounds/bg-board.png')` }}
     >
-      {/* Target-Side Debuff & Buff Overlay */}
-      <DebuffOverlay debuff={debuff} onClear={() => setDebuff({ type: null })} />
-
-      {/* Top Bar: Room, Name, Token & Score Pills */}
+      {/* Top Bar: Room, Name, Score Pill */}
       <header className="px-4 py-3 bg-[#130924]/90 border-b border-white/20 backdrop-blur-md flex items-center justify-between sticky top-0 z-40 shadow-lg">
         <div className="flex items-center gap-2">
           <button
@@ -261,30 +186,19 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Tokens Pill */}
-          <button
-            type="button"
-            onClick={() => setIsShopOpen(true)}
-            className="flex items-center gap-1 px-3 py-1 bg-amber-950/80 hover:bg-amber-900 border border-amber-500 rounded-full text-amber-300 font-mono text-xs font-bold transition-colors shadow"
-          >
-            <Coins className="w-3.5 h-3.5 text-amber-400" />
-            <span>{myTokens}</span>
-          </button>
-
-          {/* Score Pill */}
           <div className="px-3 py-1 bg-[#1A0E34] border border-white/20 rounded-full font-mono text-xs font-black text-emerald-400 shadow">
             ${myScore.toLocaleString()}
           </div>
         </div>
       </header>
 
-      {/* Contestants Money & Tokens Row at Top */}
+      {/* Contestants Row at Top */}
       <ContestantsTopRow
         players={gameState?.players || []}
         currentPlayerId={playerId}
         activePickerId={gameState?.active_picker_id}
         buzzWinnerId={gameState?.buzzer?.winner?.player_id}
-        hotPotatoHolderId={hotPotatoHolderId}
+        buzzQueue={gameState?.buzzer?.queue || []}
       />
 
       {/* Secret Partner Intel Card (If Discovered) */}
@@ -318,14 +232,11 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping inline-block mr-2" />
               Connected! Waiting for host to launch the game...
             </div>
-            <p className="text-[11px] font-mono text-slate-400">
-              When the host starts, you'll be assigned a secret teammate and given a starting balance of 3 Bounty Tokens!
-            </p>
           </div>
         </div>
       )}
 
-      {/* BOARD PHASE: Interactive Turn-Based Selection */}
+      {/* BOARD PHASE: Turn-Based Selection */}
       {isBoardPhase && (
         <div className="flex-1 flex flex-col p-3 md:p-6 overflow-y-auto">
           {/* Bonus Vault Banner */}
@@ -387,35 +298,10 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
         </div>
       )}
 
-      {/* SHOP INTERMISSION VIEW (When Host pauses for Shop) */}
-      {isShop && (
-        <div className="flex-1 flex flex-col items-center justify-center p-6 text-center max-w-md mx-auto w-full">
-          <div className="clay-card w-full bg-[#1A0E34]/95 border-2 border-amber-500/80 rounded-3xl p-6 shadow-2xl backdrop-blur-xl">
-            <Coins className="w-12 h-12 text-amber-400 mx-auto mb-3 animate-bounce" />
-            <h2 className="bubble-text gold-theme text-2xl md:text-3xl font-black mb-1">
-              SHOP INTERMISSION
-            </h2>
-            <p className="text-xs font-mono text-slate-300 mb-4">
-              Spend your Bounty Tokens ({myTokens} available) on tactical items!
-            </p>
-            <button
-              type="button"
-              onClick={() => setIsShopOpen(true)}
-              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-amber-500 to-yellow-500 hover:from-amber-400 hover:to-yellow-400 text-black font-black text-sm font-mono shadow-xl transition-transform active:scale-95 mb-3"
-            >
-              OPEN SHOP CATALOG
-            </button>
-            <p className="text-[11px] font-mono text-slate-400">
-              Waiting for Host to resume the board...
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* CLUE / BUZZER WORKSPACE (Displays Full Question to Everyone) */}
-      {!isBoardPhase && !isLobby && !isShop && (
+      {/* CLUE / BUZZER WORKSPACE */}
+      {!isBoardPhase && !isLobby && (
         <main className="flex-1 flex flex-col items-center justify-start p-3 md:p-6 max-w-4xl mx-auto w-full overflow-y-auto">
-          {/* Full Clue Presentation Card (Displayed to Contestant) */}
+          {/* Clue Card */}
           {activeClue && (
             <div className="w-full clay-card bg-[#1A0E34]/95 border-2 border-white/20 rounded-3xl p-5 md:p-6 shadow-2xl backdrop-blur-xl mb-4 text-left">
               {/* Card Header: Category & Points */}
@@ -436,9 +322,13 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
 
                 {/* Status Indicator */}
                 <div>
-                  {gameState?.buzzer?.winner ? (
+                  {isBuzzWinner ? (
                     <span className="px-3 py-1 rounded-full bg-amber-500/20 border border-amber-400 text-amber-300 font-mono text-xs font-bold animate-pulse">
-                      ⚡ {gameState.buzzer.winner.winner_name || gameState.buzzer.winner.display_name} Buzzed In!
+                      ⚡ YOU ARE ANSWERING!
+                    </span>
+                  ) : gameState?.buzzer?.winner ? (
+                    <span className="px-3 py-1 rounded-full bg-amber-500/20 border border-amber-400 text-amber-300 font-mono text-xs font-bold">
+                      ⚡ {gameState.buzzer.winner.display_name} Buzzed In!
                     </span>
                   ) : isBuzzerUnlocked ? (
                     <span className="px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400 text-emerald-400 font-mono text-xs font-bold animate-pulse">
@@ -452,40 +342,50 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
                 </div>
               </div>
 
-              {/* Clue Question Markdown Body */}
-              <div className="text-base sm:text-lg md:text-xl text-slate-100 leading-relaxed max-h-[42vh] overflow-y-auto pr-1">
-                <MarkdownViewer
-                  content={activeClue.clue_markdown || 'Loading question...'}
-                  isHost={false}
-                  mediaSyncState={mediaSyncState}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Hot Potato Peek & Pass HUD */}
-          {isHotPotatoRound && hotPotatoHolderId === playerId && (
-            <div className="mb-4 w-full max-w-sm p-4 bg-red-950/80 border-2 border-red-500 rounded-2xl text-center animate-bounce shadow-xl">
-              <span className="text-xs font-mono font-bold text-red-200 block mb-1">
-                YOU ARE HOLDING THE BOMB!
-              </span>
-              {topicPeek && (
-                <p className="text-xs text-amber-300 font-mono mb-2">Next Clue: "{topicPeek}"</p>
+              {/* Requirement 6: When contestant buzzes in, their question disappears! */}
+              {isBuzzWinner ? (
+                <div className="py-12 px-6 flex flex-col items-center justify-center text-center bg-gradient-to-br from-amber-500/20 via-purple-950/40 to-pink-500/20 rounded-2xl border-2 border-amber-400/80 shadow-2xl animate-pulse">
+                  <Zap className="w-16 h-16 text-amber-400 mb-3 animate-bounce" />
+                  <h2 className="text-2xl sm:text-3xl font-black font-display text-amber-300 uppercase tracking-wider mb-2">
+                    ⚡ YOU BUZZED IN!
+                  </h2>
+                  <p className="text-base sm:text-lg font-mono text-white font-bold mb-1">
+                    SPEAK YOUR ANSWER TO THE HOST!
+                  </p>
+                  <p className="text-xs font-mono text-slate-300">
+                    (Question text is hidden while answering)
+                  </p>
+                </div>
+              ) : hasAlreadyBuzzed && !isBuzzWinner ? (
+                <div className="py-10 px-6 flex flex-col items-center justify-center text-center bg-sky-950/40 rounded-2xl border border-sky-400/50 shadow-xl">
+                  <Clock className="w-12 h-12 text-sky-400 mb-3 animate-spin" />
+                  <h2 className="text-xl sm:text-2xl font-black font-display text-sky-300 uppercase tracking-wider mb-1">
+                    YOU ARE IN THE QUEUE (#{queuePosition || 2})
+                  </h2>
+                  <p className="text-xs font-mono text-slate-300">
+                    Your buzz is locked in! If the current answerer is wrong, you're up next!
+                  </p>
+                </div>
+              ) : isLockedOut ? (
+                <div className="py-10 px-6 flex flex-col items-center justify-center text-center bg-red-950/40 rounded-2xl border border-red-500/50 shadow-xl">
+                  <Lock className="w-12 h-12 text-red-400 mb-3" />
+                  <h2 className="text-xl sm:text-2xl font-black font-display text-red-300 uppercase tracking-wider mb-1">
+                    LOCKED OUT FOR THIS CLUE
+                  </h2>
+                  <p className="text-xs font-mono text-slate-300">
+                    You gave an incorrect answer for this clue. Waiting for the next clue!
+                  </p>
+                </div>
+              ) : (
+                /* Unbuzzed Contestant: Full Clue Question with Media Viewer */
+                <div className="text-base sm:text-lg md:text-xl text-slate-100 leading-relaxed max-h-[42vh] overflow-y-auto pr-1">
+                  <MarkdownViewer
+                    content={activeClue.clue_markdown || 'Loading question...'}
+                    isHost={false}
+                    mediaSyncState={mediaSyncState}
+                  />
+                </div>
               )}
-              <p className="text-[11px] text-slate-300 mb-2">Pass to an eligible player:</p>
-              <div className="flex flex-wrap gap-1.5 justify-center">
-                {gameState?.players
-                  ?.filter((p: any) => p.is_hot_potato_eligible && p.id !== playerId)
-                  .map((target: any) => (
-                    <button
-                      key={target.id}
-                      onClick={() => handlePassPotato(target.id)}
-                      className="py-1 px-3 bg-amber-500 hover:bg-amber-400 text-black font-bold text-xs rounded-lg"
-                    >
-                      {target.display_name}
-                    </button>
-                  ))}
-              </div>
             </div>
           )}
 
@@ -494,41 +394,38 @@ export const PlayerView: React.FC<PlayerViewProps> = ({
             <BuzzerButton
               isUnlocked={isBuzzerUnlocked}
               unlockTimestampMs={Date.now()}
-              isJammed={isJammed}
               isAuthorLocked={isAuthorLocked}
               authorDelaySeconds={1.5}
               onBuzz={handleBuzz}
-              disabled={!isBuzzerUnlocked || Boolean(gameState?.buzzer?.winner)}
+              disabled={!isBuzzerUnlocked || hasAlreadyBuzzed || isLockedOut}
             />
 
-            <span className="mt-3 text-[11px] font-mono text-slate-400 bg-black/40 px-3 py-1 rounded-full border border-white/10">
-              Keyboard shortcut: <strong className="text-amber-300">[ SPACEBAR ]</strong> to buzz
-            </span>
+            <div className="mt-3 text-center">
+              {isBuzzWinner ? (
+                <span className="text-xs font-mono text-amber-300 font-bold bg-amber-950/80 px-3 py-1 rounded-full border border-amber-500">
+                  ⚡ You won the buzzer race! Speak your answer.
+                </span>
+              ) : hasAlreadyBuzzed ? (
+                <span className="text-xs font-mono text-sky-300 font-bold bg-sky-950/80 px-3 py-1 rounded-full border border-sky-500">
+                  ⏳ Queued at position #{queuePosition || 2}. Waiting for host ruling...
+                </span>
+              ) : isLockedOut ? (
+                <span className="text-xs font-mono text-red-400 font-bold bg-red-950/80 px-3 py-1 rounded-full border border-red-500">
+                  🔒 Locked out for this clue.
+                </span>
+              ) : isBuzzerUnlocked ? (
+                <span className="text-[11px] font-mono text-emerald-300 bg-black/40 px-3 py-1 rounded-full border border-emerald-500/30">
+                  Press <strong className="text-amber-300">[ SPACEBAR ]</strong> or tap the button to buzz in!
+                </span>
+              ) : (
+                <span className="text-[11px] font-mono text-slate-400 bg-black/40 px-3 py-1 rounded-full border border-white/10">
+                  Buzzers locked
+                </span>
+              )}
+            </div>
           </div>
         </main>
       )}
-
-      {/* 5-Second Item Cast Window Drawer */}
-      <ItemCastDrawer
-        isOpen={isItemWindow}
-        categoryName={activeClue?.category_name || 'Trivia Clue'}
-        points={activeClue?.base_points || 200}
-        playerInventory={myInventory}
-        catalogItems={shopCatalog}
-        players={gameState?.players || []}
-        currentPlayerId={playerId}
-        onCastItem={handleCastItem}
-      />
-
-      {/* Intermission Shop Modal */}
-      <ShopModal
-        isOpen={isShopOpen}
-        onClose={() => setIsShopOpen(false)}
-        catalog={shopCatalog}
-        playerTokens={myTokens}
-        onBuyItem={handleBuyItem}
-        purchasedKeys={myInventory}
-      />
     </div>
   );
 };

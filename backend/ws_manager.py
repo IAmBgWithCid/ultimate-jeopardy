@@ -101,13 +101,6 @@ async def handle_websocket_message(session_id: str, client: ClientConnection, ra
         if clue_id:
             await game_manager.select_clue(session_id, clue_id)
 
-    elif msg_type == "item:cast":
-        item_key = data.get("item_key")
-        target_id = data.get("target_player_id")
-        if client.player_id and item_key:
-            res = await game_manager.cast_item(session_id, client.player_id, item_key, target_id)
-            await client.websocket.send_text(json.dumps({"type": "item:cast_result", "data": res}))
-
     elif msg_type == "host:reveal_clue":
         await game_manager.reveal_clue(session_id)
 
@@ -144,15 +137,6 @@ async def handle_websocket_message(session_id: str, client: ClientConnection, ra
     elif msg_type == "host:close_clue":
         await game_manager.close_clue(session_id)
 
-    elif msg_type == "shop:buy":
-        item_key = data.get("item_key")
-        if client.player_id and item_key:
-            res = await game_manager.buy_shop_item(session_id, client.player_id, item_key)
-            await client.websocket.send_text(json.dumps({"type": "shop:buy_result", "data": res}))
-
-    elif msg_type == "host:set_shop":
-        await game_manager.set_state_shop(session_id)
-
     elif msg_type == "host:advance_round":
         round_idx = data.get("round_idx")
         await game_manager.advance_round(session_id, round_idx)
@@ -169,17 +153,9 @@ async def handle_websocket_message(session_id: str, client: ClientConnection, ra
         if target_pid:
             await game_manager.select_buzzer_winner(session_id, target_pid)
 
-    elif msg_type == "host:close_shop":
-        await game_manager.close_shop(session_id)
-
     elif msg_type == "host:switch_board":
         is_bonus = bool(data.get("is_bonus_board", False))
         await game_manager.switch_board(session_id, is_bonus)
-
-    elif msg_type == "hot_potato:pass":
-        target_id = data.get("target_player_id")
-        if client.player_id:
-            await game_manager.pass_hot_potato(session_id, client.player_id, target_id)
 
     elif msg_type == "host:media_control":
         action = data.get("action", "play")
