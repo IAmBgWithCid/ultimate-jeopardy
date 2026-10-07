@@ -1,0 +1,117 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* ============================================================
+     3D BUBBLE & CLAY THEME TOKENS
+     ============================================================ */
+
+  /* Typography */
+  --font-display: 'Fredoka', 'DynaPuff', cursive, sans-serif;
+  --font-board: 'Fredoka', cursive, sans-serif;
+  --font-body: 'Fredoka', system-ui, sans-serif;
+  --font-mono: 'Consolas', 'Courier New', monospace;
+
+  /* Theme Palette */
+  --color-bg: #150F26;
+  --color-board-frame: rgba(255, 255, 255, 0.15);
+  --color-tile-bg: linear-gradient(180deg, #3A236E 0%, #201344 100%);
+  --color-tile-hover: linear-gradient(180deg, #4F3294 0%, #2D1B5E 100%);
+  --color-gold: #FFD166;
+  --color-pink: #FF66B2;
+  --color-cyan: #4CC9F0;
+  --color-purple: #7209B7;
+
+  /* 3D Card & Tile Extrusion Geometry */
+  --tile-border-radius: 18px;
+  --tile-border-width: 3px;
+  --tile-border-color: rgba(255, 255, 255, 0.4);
+  --tile-shadow: 0 6px 0px rgba(0, 0, 0, 0.35), 0 10px 20px rgba(0, 0, 0, 0.25);
+  --tile-glow: 0 0 25px rgba(247, 37, 133, 0.5);
+
+  /* Buzzer Theme */
+  --buzzer-idle-bg: #4A4E69;
+  --buzzer-unlocked-bg: #06D6A0;
+  --buzzer-locked-bg: #22223B;
+  --buzzer-pressed-bg: #059669;
+  --buzzer-jammed-bg: #343A40;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  background-color: var(--color-bg);
+  color: #F8FAFC;
+}
+
+/* ============================================================
+   3D SHADED BUBBLE TYPOGRAPHY MECHANICS
+   ============================================================ */
+.bubble-text {
+  font-family: 'Fredoka', cursive, sans-serif;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  display: inline-block;
+  
+  /* Enables text gradient */
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  
+  /* Bubble 3D depth and outline */
+  filter: drop-shadow(0px 4px 0px rgba(0, 0, 0, 0.35));
+}
+
+/* Light Blue to Navy Blue Theme */
+.blue-theme {
+  background-image: linear-gradient(180deg, #70d6ff 15%, #0077b6 65%, #03045e 100%);
+  -webkit-text-stroke: 1.5px #023e8a;
+}
+
+/* Light Pink to Dark Pink Theme */
+.pink-theme {
+  background-image: linear-gradient(180deg, #ffcbf2 15%, #f72585 70%, #7209b7 100%);
+  -webkit-text-stroke: 1.5px #b5179e;
+}
+
+/* Target Word: Highlight "CRIT" in Red */
+.red-crit {
+  background-image: linear-gradient(180deg, #ff7b7b 10%, #e60000 65%, #7a0000 100%);
+  -webkit-text-stroke: 2px #500000;
+  transform: scale(1.15) rotate(-3deg);
+  filter: drop-shadow(0px 5px 0px #400000);
+  margin: 0 6px;
+}
+
+/* Vibrant Gold to Bronze Theme */
+.gold-theme {
+  background-image: linear-gradient(180deg, #FFF099 15%, #FFB703 60%, #FB8500 100%);
+  -webkit-text-stroke: 1.5px #8C4A00;
+  filter: drop-shadow(0px 4px 0px rgba(140, 74, 0, 0.4));
+}
+
+/* Green Candy Theme */
+.green-theme {
+  background-image: linear-gradient(180deg, #B5E48C 15%, #52B788 65%, #1B4332 100%);
+  -webkit-text-stroke: 1.5px #1B4332;
+}
+
+/* Custom 3D Clay / Bubble Card Styling */
+.clay-card {
+  border-radius: var(--tile-border-radius);
+  border: var(--tile-border-width) solid var(--tile-border-color);
+  box-shadow: var(--tile-shadow);
+  transition: all 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.clay-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 0px rgba(0, 0, 0, 0.35), 0 14px 24px rgba(0, 0, 0, 0.3);
+}
+
+.clay-card:active {
+  transform: translateY(3px);
+  box-shadow: 0 2px 0px rgba(0, 0, 0, 0.35), 0 4px 10px rgba(0, 0, 0, 0.2);
+}

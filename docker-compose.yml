@@ -1,0 +1,13 @@
+services:
+  ultimate-jeopardy:
+    build: .
+    container_name: ultimate_jeopardy
+    restart: unless-stopped
+    ports:
+      - "${PORT:-9420}:${PORT:-9420}"
+    environment:
+      - PORT=${PORT:-9420}
+      - DATABASE_URL=sqlite:////data/jeopardy.db
+      - STATIC_DIR=/app/static
+    volumes:
+      - ./data:/data
